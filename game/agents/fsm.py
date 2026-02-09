@@ -1,4 +1,5 @@
 import logging
+import random
 from abc import ABC, abstractmethod
 from typing import Dict, Optional, Type, TYPE_CHECKING
 
@@ -119,13 +120,23 @@ class FleeState(State):
         pass
 
     def execute(self, agent, world_state) -> Optional[str]:
-        if agent.health > 50:
+        if agent.health > 70:
             return "SCAVENGE"
             
-        # Flee Logic: Just random movement away or towards 'safety' (0,0) for now
-        # A* to safety
+        # Flee Logic: Move towards corners or away from enemies
         if not agent.path:
-            agent.plan_path((0, 0), world_state.world if hasattr(world_state, 'world') else world_state)
+            # Plan path to safety (e.g., center of map or a corner)
+            w, h = 20, 15
+            world = getattr(world_state, 'world', None)
+            if world:
+                w, h = world.width, world.height
+            
+            # Simple safety: pick a corner furthest from center
+            targets = [(0,0), (w-1, 0), (0, h-1), (w-1, h-1)]
+            target = random.choice(targets)
+            
+            if world:
+                agent.plan_path(target, world)
             
         return None
 
@@ -143,7 +154,7 @@ class ScavengeState(State):
         # 1. Transitions
         if agent.health < 30:
             return "EAT"
-        if agent.inventory.get("scrap", 0) > 10:
+        if agent.inventory.get("scrap", 0) >= 15: # Increased threshold slightly
             return "UPGRADE"
             
         # Check for nearby enemies to initiate FIGHT
@@ -210,13 +221,13 @@ class EatState(State):
         if hasattr(world_state, 'economy'):
             success = world_state.economy.consume_item(agent, ResourceType.FOOD, 1)
             if not success:
-                # No food? Panic or go scavenge
+                # No food? Go scavenge
                 return "SCAVENGE"
+            else:
+                print(f"[Agent {agent.id}] EATING: Health is now {agent.health:.1f}")
         
-        if agent.health >= 90:
-            return "SCAVENGE"
-            
-        return None
+        # Go back to scavenging after eating (or if we can't eat anymore)
+        return "SCAVENGE"
 
     def exit(self, agent):
         pass
@@ -230,16 +241,27 @@ class UpgradeState(State):
 
     def execute(self, agent, world_state) -> Optional[str]:
         if hasattr(world_state, 'economy'):
-             # Try buy health upgrade
-             upgrade = world_state.economy.get_affordable_upgrade(agent, UpgradeType.MAX_HEALTH)
-             if upgrade:
-                 world_state.economy.purchase_upgrade(agent, upgrade)
-                 logger.info(f"Agent {agent.id} bought {upgrade.name}")
+             # Try buy health upgrade or weapon damage
+             upgrades_to_check = [UpgradeType.MAX_HEALTH, UpgradeType.WEAPON_DMG]
+             bought_anything = False
+             
+             for utype in upgrades_to_check:
+                 upgrade = world_state.economy.get_affordable_upgrade(agent, utype)
+                 if upgrade:
+                     if world_state.economy.purchase_upgrade(agent, upgrade):
+                         print(f"[Agent {agent.id}] PURCHASED Upgrade: {upgrade.name} (Level {upgrade.level})")
+                         bought_anything = True
+                         break # Buy one at a time to prevent double-spending in one tick
+             
+             # If we can't afford anything or already have all upgrades, go back to scavenging
+             if not bought_anything:
+                 # Check if we still have enough scrap to potentially buy something later
+                 # If we have scrap but get_affordable_upgrade returned None, it means 
+                 # we either already have all upgrades or the current ones are too expensive.
+                 return "SCAVENGE"
         
-        if agent.inventory.get("scrap", 0) < 5:
-            return "SCAVENGE"
-            
-        return None
+        # Always return to scavenge after trying to upgrade to avoid getting stuck
+        return "SCAVENGE"
 
     def exit(self, agent):
         pass
