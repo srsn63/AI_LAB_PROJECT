@@ -148,25 +148,46 @@ class ScavengeState(State):
         for other in potential_targets:
             if other.id != agent.id and other.health > 0:
                 dist = abs(agent.x - other.x) + abs(agent.y - other.y)
-                if dist < 8: # Increased detection range
+                if dist < 8:
                     return "FIGHT"
             
-        # 2. Logic: Move randomly or to resource
-        # For demo, let's just wander if no path
+        # 2. Logic: Move to nearest resource
         if not agent.path:
-            import random
-            # Pick random point on map
-            w, h = 20, 15
-            if hasattr(world_state, 'world') and world_state.world:
-                w = world_state.world.width
-                h = world_state.world.height
+            world = getattr(world_state, 'world', None)
+            if world and world.resources:
+                # Find nearest resource
+                nearest = None
+                min_dist = float('inf')
+                for res in world.resources:
+                    dist = abs(agent.x - res.x) + abs(agent.y - res.y)
+                    if dist < min_dist:
+                        min_dist = dist
+                        nearest = res
                 
-            rx = random.randint(0, w-1)
-            ry = random.randint(0, h-1)
-            
-            # Plan A* path
-            if hasattr(world_state, 'world') and world_state.world:
-                agent.plan_path((rx, ry), world_state.world)
+                if nearest:
+                    agent.plan_path((nearest.x, nearest.y), world)
+            else:
+                # Wander if no resources
+                import random
+                w, h = 20, 15
+                if world:
+                    w, h = world.width, world.height
+                rx, ry = random.randint(0, w-1), random.randint(0, h-1)
+                if world:
+                    agent.plan_path((rx, ry), world)
+
+        # 3. Resource collection check
+        world = getattr(world_state, 'world', None)
+        if world:
+            for i, res in enumerate(world.resources):
+                if res.x == agent.x and res.y == agent.y:
+                    # Collect!
+                    from game.systems.economy import ResourceType
+                    res_type = ResourceType(res.type)
+                    world_state.economy.collect_resource(agent, res_type, res.amount)
+                    world.resources.pop(i)
+                    agent.path = [] # Target reached/gone
+                    break
                 
         return None
 

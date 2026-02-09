@@ -57,12 +57,20 @@ class Game:
 
     def _spawn_agents(self):
         self.agents = []
-        # Agent 1 (Hero) - Start in corners
-        agent1 = BaseAgent(id=1, x=2, y=2, health=100.0, ammo=20)
+        
+        # Get balanced spawns from map generator
+        from game.world.generator import MapGenerator
+        generator = MapGenerator(self.world.width, self.world.height, seed=self.seed)
+        spawn_points = generator.get_balanced_spawns(self.world.grid, count=2)
+        
+        # Agent 1 (Hero)
+        s1 = spawn_points[0]
+        agent1 = BaseAgent(id=1, x=s1[0], y=s1[1], health=100.0, ammo=20)
         self.agents.append(agent1)
         
-        # Agent 2 (Enemy/Rival) - Start in corners
-        agent2 = BaseAgent(id=2, x=18, y=12, health=100.0, ammo=20)
+        # Agent 2 (Enemy/Rival)
+        s2 = spawn_points[1]
+        agent2 = BaseAgent(id=2, x=s2[0], y=s2[1], health=100.0, ammo=20)
         self.agents.append(agent2)
         
         # Initialize metrics for agents

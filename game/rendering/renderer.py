@@ -42,7 +42,11 @@ class GameRenderer:
 
         if getattr(game_state, "world", None) is not None and game_state.world.grid:
             self._render_world(game_state)
+            self._render_resources(game_state)
             
+        # Draw Fog of War (Confidence Visualization)
+        self._render_fog_of_war(game_state)
+
         if getattr(game_state, "agents", None):
             self._render_agents(game_state)
 
@@ -53,42 +57,113 @@ class GameRenderer:
 
         pygame.display.flip()
 
+    def _render_resources(self, game_state) -> None:
+        tile_size = self.config.TILE_SIZE
+        world = game_state.world
+        
+        for res in world.resources:
+            color = (255, 255, 0) # Default Yellow
+            if res.type == "food":
+                color = (255, 100, 100) # Pinkish Red
+            elif res.type == "ammo":
+                color = (100, 255, 255) # Cyan
+            elif res.type == "scrap":
+                color = (200, 200, 200) # Silver
+                
+            center_x = res.x * tile_size + tile_size // 2
+            center_y = res.y * tile_size + tile_size // 2
+            
+            # Draw small diamond/cross for resource
+            pygame.draw.rect(self.screen, color, (center_x - 2, center_y - 2, 4, 4))
+            pygame.draw.rect(self.screen, (255, 255, 255), (center_x - 2, center_y - 2, 4, 4), 1)
+
+    def _render_fog_of_war(self, game_state) -> None:
+        """Visualizes agent visibility/confidence."""
+        # Find the primary agent (Agent 1)
+        hero = next((a for a in game_state.agents if a.id == 1), None)
+        if not hero:
+            return
+
+        tile_size = self.config.TILE_SIZE
+        width = game_state.world.width
+        height = game_state.world.height
+
+        # Create a transparent fog surface
+        fog_surf = pygame.Surface((self.config.SCREEN_WIDTH, self.config.SCREEN_HEIGHT), pygame.SRCALPHA)
+        fog_surf.fill((0, 0, 0, 150)) # Default semi-transparent black
+
+        # Draw "light" around the hero
+        hero_x = hero.x * tile_size + tile_size // 2
+        hero_y = hero.y * tile_size + tile_size // 2
+        
+        # Max visibility range from VisibilitySystem (15 tiles)
+        view_radius = 12 * tile_size 
+        
+        # Simple radial gradient for light
+        for r in range(view_radius, 0, -tile_size):
+            alpha = int(150 * (r / view_radius))
+            pygame.draw.circle(fog_surf, (0, 0, 0, alpha), (hero_x, hero_y), r)
+
+        self.screen.blit(fog_surf, (0, 0))
+
     def _render_world(self, game_state) -> None:
         tile_size = self.config.TILE_SIZE
         world = game_state.world
 
+        # Terrain colors (more natural gradients)
+        TERRAIN_COLORS = {
+            "floor": (50, 50, 55),      # Dark Gray
+            "water": (30, 60, 100),     # Deep Blue
+            "wall": (20, 20, 25),       # Near Black
+            "mud": (80, 60, 40),        # Brown
+            "grass": (40, 90, 40),      # Forest Green
+            "rock": (100, 100, 110),    # Slate Gray
+        }
+
         for y, row in enumerate(world.grid):
             for x, tile in enumerate(row):
-                if tile.terrain.value == "floor":
-                    color = (40, 40, 40)
-                elif tile.terrain.value == "water":
-                    color = (0, 0, 120)
-                else:
-                    color = (90, 90, 90)
-
+                color = TERRAIN_COLORS.get(tile.terrain.value, (255, 0, 255))
+                
                 rect = pygame.Rect(x * tile_size, y * tile_size, tile_size, tile_size)
                 pygame.draw.rect(self.screen, color, rect)
+                
+                # Add a subtle grid/border in debug mode if needed
+                # pygame.draw.rect(self.screen, (30, 30, 30), rect, 1)
 
     def _render_agents(self, game_state) -> None:
         tile_size = self.config.TILE_SIZE
         
         for agent in game_state.agents:
-            # Draw Agent Body
-            rect = pygame.Rect(agent.x * tile_size + 4, agent.y * tile_size + 4, tile_size - 8, tile_size - 8)
-            pygame.draw.rect(self.screen, self.config.GREEN, rect)
+            if agent.health <= 0: continue
+
+            # Draw Agent Body (Diamond/Circle for more personality)
+            center_x = agent.x * tile_size + tile_size // 2
+            center_y = agent.y * tile_size + tile_size // 2
             
-            # Draw Health Bar
+            # Draw shadow
+            pygame.draw.circle(self.screen, (20, 20, 20), (center_x + 2, center_y + 2), tile_size // 3)
+            
+            # Agent color based on ID
+            color = (50, 200, 50) if agent.id == 1 else (200, 50, 50)
+            pygame.draw.circle(self.screen, color, (center_x, center_y), tile_size // 3)
+            pygame.draw.circle(self.screen, (255, 255, 255), (center_x, center_y), tile_size // 3, 2)
+            
+            # Draw Health Bar (Cleaner)
             health_pct = max(0.0, agent.health / 100.0)
-            bar_w = tile_size - 4
-            bar_h = 4
-            pygame.draw.rect(self.screen, self.config.RED, (agent.x * tile_size + 2, agent.y * tile_size - 6, bar_w, bar_h))
-            pygame.draw.rect(self.screen, self.config.GREEN, (agent.x * tile_size + 2, agent.y * tile_size - 6, bar_w * health_pct, bar_h))
+            bar_w = tile_size - 8
+            bar_h = 3
+            bar_x = agent.x * tile_size + 4
+            bar_y = agent.y * tile_size - 4
+            
+            pygame.draw.rect(self.screen, (40, 0, 0), (bar_x, bar_y, bar_w, bar_h))
+            pygame.draw.rect(self.screen, (0, 255, 0), (bar_x, bar_y, int(bar_w * health_pct), bar_h))
             
             # Draw Debug Info (State)
             if hasattr(agent, 'fsm') and agent.fsm.current_state:
                 state_text = agent.fsm.current_state.name
-                text_surf = self.small_font.render(state_text, True, self.config.WHITE)
-                self.screen.blit(text_surf, (agent.x * tile_size, agent.y * tile_size + tile_size))
+                text_surf = self.small_font.render(state_text, True, (220, 220, 220))
+                text_rect = text_surf.get_rect(center=(center_x, agent.y * tile_size + tile_size + 8))
+                self.screen.blit(text_surf, text_rect)
 
     def tick(self, fps: int):
         """Wait to maintain FPS."""

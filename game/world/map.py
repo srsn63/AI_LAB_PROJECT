@@ -8,6 +8,9 @@ class TerrainType(Enum):
     FLOOR = "floor"
     WATER = "water"
     WALL = "wall"
+    MUD = "mud"
+    GRASS = "grass"
+    ROCK = "rock"
 
 
 @dataclass(frozen=True)
@@ -16,38 +19,34 @@ class Tile:
     cost: float
 
 
-TERRAIN_WEIGHTS = {
-    TerrainType.FLOOR: 0.6,
-    TerrainType.WATER: 0.25,
-    TerrainType.WALL: 0.15,
-}
-
 TERRAIN_COSTS = {
     TerrainType.FLOOR: 1.0,
-    TerrainType.WATER: 3.0,
-    TerrainType.WALL: 5.0,
+    TerrainType.WATER: 5.0,
+    TerrainType.WALL: 99.0, # Essentially impassable for A*
+    TerrainType.MUD: 3.0,
+    TerrainType.GRASS: 1.2,
+    TerrainType.ROCK: 2.0,
 }
 
+
+@dataclass
+class ResourceEntity:
+    x: int
+    y: int
+    type: str # "scrap", "food", "ammo"
+    amount: int
 
 @dataclass
 class World:
     width: int
     height: int
     grid: List[List[Tile]] = field(default_factory=list)
+    resources: List[ResourceEntity] = field(default_factory=list)
 
     def generate(self, seed: Optional[int] = None) -> None:
-        rng = random.Random(seed)
-        terrain_types = list(TERRAIN_WEIGHTS.keys())
-        weights = list(TERRAIN_WEIGHTS.values())
-
-        self.grid = []
-        for _y in range(self.height):
-            row: List[Tile] = []
-            for _x in range(self.width):
-                terrain = rng.choices(terrain_types, weights=weights, k=1)[0]
-                cost = TERRAIN_COSTS[terrain]
-                row.append(Tile(terrain=terrain, cost=cost))
-            self.grid.append(row)
+        from game.world.generator import MapGenerator
+        generator = MapGenerator(self.width, self.height, seed=seed)
+        self.grid, self.resources = generator.generate()
 
     def get_neighbors(self, x: int, y: int) -> List[Tuple[int, int]]:
         neighbors: List[Tuple[int, int]] = []
