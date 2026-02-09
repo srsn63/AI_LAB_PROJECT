@@ -21,7 +21,7 @@ class Game:
         self.last_time = time.time()
         self.dt = 0.0
         self.accumulator = 0.0
-        self.fixed_dt = 1.0 / 60.0 # 60 Hz simulation
+        self.fixed_dt = 0.2  # 5 Hz simulation (5 updates per second) for better visibility
         
         # Systems
         self.world: Optional[World] = None

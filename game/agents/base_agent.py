@@ -47,10 +47,31 @@ class BaseAgent:
 
     def update(self, world_state) -> None:
         # Update FSM logic first
+        old_state = self.fsm.current_state.name if self.fsm.current_state else "None"
         self.fsm.update(world_state)
+        new_state = self.fsm.current_state.name if self.fsm.current_state else "None"
+        
+        if old_state != new_state:
+            print(f"[Agent {self.id}] State Changed: {old_state} -> {new_state}")
         
         # Then execute movement if path exists
         if self.path and self._path_index < len(self.path):
             next_pos = self.path[self._path_index]
+            old_pos = (self.x, self.y)
             self.x, self.y = next_pos
             self._path_index += 1
+            
+            # Print move indicator
+            dx = self.x - old_pos[0]
+            dy = self.y - old_pos[1]
+            direction = ""
+            if dx > 0: direction = "RIGHT"
+            elif dx < 0: direction = "LEFT"
+            elif dy > 0: direction = "DOWN"
+            elif dy < 0: direction = "UP"
+            
+            if direction:
+                print(f"[Agent {self.id}] Move: {direction} to ({self.x}, {self.y}) | State: {new_state}")
+        elif self.fsm.current_state.name == "FIGHT":
+             # Special logging for combat actions could go here
+             pass

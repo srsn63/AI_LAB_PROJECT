@@ -89,15 +89,18 @@ class FightState(State):
             if move == "ATTACK":
                 agent.ammo -= 1
                 target.health -= 10
-                logger.info(f"Agent {agent.id} ATTACKS Agent {target.id}!")
-            elif move == "MOVE_LEFT":
-                agent.x -= 1
-            elif move == "MOVE_RIGHT":
-                agent.x += 1
-            elif move == "MOVE_UP":
-                agent.y -= 1
-            elif move == "MOVE_DOWN":
-                agent.y += 1
+                print(f"[Agent {agent.id}] Action: ATTACK Agent {target.id} | Score: {score:.2f}")
+            elif move.startswith("MOVE"):
+                old_pos = (agent.x, agent.y)
+                if move == "MOVE_LEFT":
+                    agent.x -= 1
+                elif move == "MOVE_RIGHT":
+                    agent.x += 1
+                elif move == "MOVE_UP":
+                    agent.y -= 1
+                elif move == "MOVE_DOWN":
+                    agent.y += 1
+                print(f"[Agent {agent.id}] Action: {move} to ({agent.x}, {agent.y}) | Combat Score: {score:.2f}")
                 
         else:
             # No enemies? Go back to scavenging
@@ -185,6 +188,7 @@ class ScavengeState(State):
                     from game.systems.economy import ResourceType
                     res_type = ResourceType(res.type)
                     world_state.economy.collect_resource(agent, res_type, res.amount)
+                    print(f"[Agent {agent.id}] Collected: {res.amount} {res.type} at ({res.x}, {res.y})")
                     world.resources.pop(i)
                     agent.path = [] # Target reached/gone
                     break
