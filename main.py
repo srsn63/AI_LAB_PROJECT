@@ -199,6 +199,12 @@ def main():
                     if loop_count % 100 == 0:
                         print("Rendering black screen (not initialized)")
                     renderer.screen.fill((0,0,0))
+                    # Show waiting text centered on game area
+                    wait_font = pygame.font.SysFont("Consolas", 18)
+                    wait_txt = wait_font.render("Connecting to server...", True, (80, 160, 255))
+                    renderer.screen.blit(wait_txt,
+                        (renderer.screen.get_width() // 2 - wait_txt.get_width() // 2,
+                         renderer.screen.get_height() // 2 - wait_txt.get_height() // 2))
                     pygame.display.flip()
             except Exception as e:
                 print(f"Render Loop Error: {e}")
