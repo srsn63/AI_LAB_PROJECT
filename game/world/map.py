@@ -59,3 +59,14 @@ class World:
 
     def get_cost(self, x: int, y: int) -> float:
         return self.grid[y][x].cost
+
+    def get_resource_at(self, x: int, y: int) -> Optional[ResourceEntity]:
+        for res in self.resources:
+            if res.x == x and res.y == y:
+                return res
+        return None
+
+    def is_walkable(self, x: int, y: int) -> bool:
+        if 0 <= x < self.width and 0 <= y < self.height:
+            return self.grid[y][x].terrain != TerrainType.WALL
+        return False

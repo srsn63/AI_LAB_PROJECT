@@ -12,8 +12,10 @@ class BaseAgent:
     x: int
     y: int
     health: float = 100.0
+    max_health: float = 100.0
     ammo: int = 0
     inventory: Dict[str, int] = field(default_factory=dict)
+    upgrades: Dict[Any, int] = field(default_factory=dict)
     
     path: List[Coord] = field(default_factory=list)
     _path_index: int = 0

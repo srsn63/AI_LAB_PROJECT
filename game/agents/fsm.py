@@ -55,7 +55,7 @@ class FightState(State):
 
     def execute(self, agent, world_state) -> Optional[str]:
         # 1. Check Vital Transitions
-        if agent.health < 20: # Lowered threshold to keep fighting longer
+        if agent.health <= 20: # Lowered threshold to keep fighting longer
             return "FLEE"
         if agent.ammo <= 0:
             return "SCAVENGE" # Go find ammo/scrap
@@ -86,13 +86,15 @@ class FightState(State):
             move, score = self.minimax.get_best_move(state, depth=self.depth)
             
             # Apply Move (Simplified: Agent updates position directly or shoots)
-            # In a real engine, we'd emit a Command. Here we modify agent state directly for Phase 9 demo.
+            # In networked mode, NetworkedAgent will detect these changes, revert them locally,
+            # and send the request to the server.
+            
             if move == "ATTACK":
                 agent.ammo -= 1
-                target.health -= 10
+                # We don't update target health locally in networked mode
+                # The server will handle it and update us via state
                 print(f"[Agent {agent.id}] Action: ATTACK Agent {target.id} | Score: {score:.2f}")
             elif move.startswith("MOVE"):
-                old_pos = (agent.x, agent.y)
                 if move == "MOVE_LEFT":
                     agent.x -= 1
                 elif move == "MOVE_RIGHT":
@@ -117,31 +119,96 @@ class FleeState(State):
     name = "FLEE"
 
     def enter(self, agent):
-        pass
+        agent.path = []
+        agent._path_index = 0
 
     def execute(self, agent, world_state) -> Optional[str]:
         if agent.health > 70:
             return "SCAVENGE"
-            
-        # Flee Logic: Move towards corners or away from enemies
-        if not agent.path:
-            # Plan path to safety (e.g., center of map or a corner)
-            w, h = 20, 15
-            world = getattr(world_state, 'world', None)
-            if world:
-                w, h = world.width, world.height
-            
-            # Simple safety: pick a corner furthest from center
-            targets = [(0,0), (w-1, 0), (0, h-1), (w-1, h-1)]
-            target = random.choice(targets)
-            
-            if world:
+
+        world = getattr(world_state, "world", None)
+        if not world:
+            return None
+
+        threats = []
+        for other in getattr(world_state, "agents", []):
+            if getattr(other, "id", None) == agent.id:
+                continue
+            if getattr(other, "health", 0) <= 0:
+                continue
+            if getattr(other, "x", None) is None or getattr(other, "y", None) is None:
+                continue
+            threats.append(other)
+
+        def min_threat_dist(pos):
+            if not threats:
+                return 10**9
+            px, py = pos
+            return min(abs(px - t.x) + abs(py - t.y) for t in threats)
+
+        def nearest_walkable(pos):
+            tx, ty = pos
+            if world.is_walkable(tx, ty):
+                return (tx, ty)
+            max_r = max(world.width, world.height)
+            for r in range(1, max_r):
+                for dx in range(-r, r + 1):
+                    for dy in (-r, r):
+                        nx, ny = tx + dx, ty + dy
+                        if world.is_walkable(nx, ny):
+                            return (nx, ny)
+                for dy in range(-r + 1, r):
+                    for dx in (-r, r):
+                        nx, ny = tx + dx, ty + dy
+                        if world.is_walkable(nx, ny):
+                            return (nx, ny)
+            return None
+
+        is_path_finished = not agent.path or agent._path_index >= len(agent.path)
+        if is_path_finished:
+            bases = [
+                (0, 0),
+                (world.width - 1, 0),
+                (0, world.height - 1),
+                (world.width - 1, world.height - 1),
+                (world.width // 2, world.height // 2),
+            ]
+
+            candidates = []
+            for base in bases:
+                p = nearest_walkable(base)
+                if p:
+                    candidates.append(p)
+
+            for _ in range(40):
+                rx = random.randint(0, world.width - 1)
+                ry = random.randint(0, world.height - 1)
+                if world.is_walkable(rx, ry):
+                    candidates.append((rx, ry))
+
+            candidates = [p for p in candidates if p != (agent.x, agent.y)]
+            candidates.sort(key=lambda p: (min_threat_dist(p), random.random()), reverse=True)
+
+            planned = False
+            for target in candidates[:25]:
                 agent.plan_path(target, world)
-            
+                if agent.path and len(agent.path) >= 2:
+                    planned = True
+                    break
+                agent.path = []
+                agent._path_index = 0
+
+            if not planned:
+                neighbors = getattr(world, "get_neighbors", lambda x, y: [])(agent.x, agent.y)
+                if neighbors:
+                    best = max(neighbors, key=min_threat_dist)
+                    agent.set_path([best])
+
         return None
 
     def exit(self, agent):
-        agent.path = [] # Clear path on exit
+        agent.path = []
+        agent._path_index = 0
 
 
 class ScavengeState(State):
@@ -166,20 +233,33 @@ class ScavengeState(State):
                     return "FIGHT"
             
         # 2. Logic: Move to nearest resource
-        if not agent.path:
+        # Fix: Check if path is finished or empty
+        is_path_finished = not agent.path or agent._path_index >= len(agent.path)
+        
+        if is_path_finished:
             world = getattr(world_state, 'world', None)
             if world and world.resources:
-                # Find nearest resource
+                # Find nearest resource that IS NOT the one we are currently on
                 nearest = None
                 min_dist = float('inf')
                 for res in world.resources:
+                    # Skip if we are already on this resource
+                    if res.x == agent.x and res.y == agent.y:
+                        continue
+                        
                     dist = abs(agent.x - res.x) + abs(agent.y - res.y)
                     if dist < min_dist:
                         min_dist = dist
                         nearest = res
                 
                 if nearest:
+                    # Clear old path before planning new one
+                    agent.path = []
                     agent.plan_path((nearest.x, nearest.y), world)
+                else:
+                    # If we are only seeing the resource we are on, just stay here
+                    # and wait for it to be collected.
+                    pass
             else:
                 # Wander if no resources
                 import random
@@ -188,20 +268,28 @@ class ScavengeState(State):
                     w, h = world.width, world.height
                 rx, ry = random.randint(0, w-1), random.randint(0, h-1)
                 if world:
+                    agent.path = []
                     agent.plan_path((rx, ry), world)
 
         # 3. Resource collection check
         world = getattr(world_state, 'world', None)
         if world:
+            # We check if we are on a resource. 
+            # In networked mode, the server handles collection, 
+            # but we still want to clear the path locally if we reached it.
             for i, res in enumerate(world.resources):
                 if res.x == agent.x and res.y == agent.y:
-                    # Collect!
-                    from game.systems.economy import ResourceType
-                    res_type = ResourceType(res.type)
-                    world_state.economy.collect_resource(agent, res_type, res.amount)
-                    print(f"[Agent {agent.id}] Collected: {res.amount} {res.type} at ({res.x}, {res.y})")
-                    world.resources.pop(i)
-                    agent.path = [] # Target reached/gone
+                    # If not networked, collect immediately
+                    if hasattr(world_state, 'economy'):
+                        from game.systems.economy import ResourceType
+                        res_type = ResourceType(res.type)
+                        world_state.economy.collect_resource(agent, res_type, res.amount)
+                        print(f"[Agent {agent.id}] Collected: {res.amount} {res.type} at ({res.x}, {res.y})")
+                        world.resources.pop(i)
+                    
+                    # Clear path regardless (we reached the target)
+                    agent.path = []
+                    agent._path_index = 0
                     break
                 
         return None
@@ -225,8 +313,13 @@ class EatState(State):
                 return "SCAVENGE"
             else:
                 print(f"[Agent {agent.id}] EATING: Health is now {agent.health:.1f}")
+        else:
+            # Networked mode: The NetworkedAgent.update will detect the state is "EAT"
+            # and send the action. We just need to check if we have food locally.
+            if agent.inventory.get("food", 0) <= 0:
+                return "SCAVENGE"
         
-        # Go back to scavenging after eating (or if we can't eat anymore)
+        # Go back to scavenging after eating
         return "SCAVENGE"
 
     def exit(self, agent):
@@ -241,7 +334,7 @@ class UpgradeState(State):
 
     def execute(self, agent, world_state) -> Optional[str]:
         if hasattr(world_state, 'economy'):
-             # Try buy health upgrade or weapon damage
+             # Local/Singleplayer logic
              upgrades_to_check = [UpgradeType.MAX_HEALTH, UpgradeType.WEAPON_DMG]
              bought_anything = False
              
@@ -251,16 +344,19 @@ class UpgradeState(State):
                      if world_state.economy.purchase_upgrade(agent, upgrade):
                          print(f"[Agent {agent.id}] PURCHASED Upgrade: {upgrade.name} (Level {upgrade.level})")
                          bought_anything = True
-                         break # Buy one at a time to prevent double-spending in one tick
+                         break
              
-             # If we can't afford anything or already have all upgrades, go back to scavenging
              if not bought_anything:
-                 # Check if we still have enough scrap to potentially buy something later
-                 # If we have scrap but get_affordable_upgrade returned None, it means 
-                 # we either already have all upgrades or the current ones are too expensive.
                  return "SCAVENGE"
+        else:
+            # Networked logic: set intent for NetworkedAgent to pick up
+            # Choose an upgrade based on some heuristic
+            if agent.health < agent.max_health:
+                agent.pending_upgrade_type = "MAX_HEALTH"
+            else:
+                agent.pending_upgrade_type = "WEAPON_DMG"
         
-        # Always return to scavenge after trying to upgrade to avoid getting stuck
+        # Always return to scavenge after trying to upgrade
         return "SCAVENGE"
 
     def exit(self, agent):

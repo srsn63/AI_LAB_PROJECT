@@ -50,7 +50,8 @@ class EconomySystem:
             
             # Effect application
             if resource == ResourceType.FOOD:
-                agent.health = min(100.0, agent.health + (amount * 10)) # 1 Food = 10 Health
+                max_health = getattr(agent, "max_health", 100.0)
+                agent.health = min(max_health, agent.health + (amount * 10))
             elif resource == ResourceType.AMMO:
                 agent.ammo += amount # Logic usually handles ammo differently, but for consistency
                 
@@ -88,3 +89,23 @@ class EconomySystem:
             
             return True
         return False
+
+    def get_upgrade_cost(self, agent, upgrade_type: UpgradeType) -> Optional[int]:
+        upgrades = self.available_upgrades.get(upgrade_type, [])
+        current_level = agent.upgrades.get(upgrade_type, 0)
+        if current_level >= len(upgrades):
+            return None
+        return upgrades[current_level].cost
+
+    def apply_upgrade(self, agent, upgrade_type: UpgradeType) -> bool:
+        upgrades = self.available_upgrades.get(upgrade_type, [])
+        current_level = agent.upgrades.get(upgrade_type, 0)
+        if current_level >= len(upgrades):
+            return False
+        upgrade = upgrades[current_level]
+        agent.upgrades[upgrade_type] = current_level + 1
+        if upgrade.type == UpgradeType.MAX_HEALTH:
+            max_health = getattr(agent, "max_health", 100.0)
+            agent.max_health = max_health + upgrade.value
+            agent.health = min(agent.max_health, agent.health + upgrade.value)
+        return True

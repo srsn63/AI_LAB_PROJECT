@@ -1,4 +1,6 @@
 import pygame
+import traceback
+import sys
 from game.core.config import GameConfig
 
 class GameRenderer:
@@ -33,29 +35,67 @@ class GameRenderer:
             # Add other input mappings here
         return events
 
-    def render(self, game_state):
+    def render(self, game_state, local_agent_id=1):
         """
-        Render the current game state.
-        :param game_state: The Game object or specific state data.
+        Main render call.
+        :param game_state: The current game state object.
+        :param local_agent_id: The ID of the agent whose perspective we are viewing.
         """
-        self.screen.fill(self.config.BLACK)
+        try:
+            self.screen.fill(self.config.BLACK)
 
-        if getattr(game_state, "world", None) is not None and game_state.world.grid:
-            self._render_world(game_state)
-            self._render_resources(game_state)
-            
-        # Draw Fog of War (Confidence Visualization)
-        self._render_fog_of_war(game_state)
+            # Check for world existence before rendering world related layers
+            has_world = getattr(game_state, "world", None) is not None and game_state.world.grid
+            has_agents = getattr(game_state, "agents", None) is not None
 
-        if getattr(game_state, "agents", None):
-            self._render_agents(game_state)
+            if has_world:
+                self._render_world(game_state)
+                self._render_resources(game_state)
+                
+            # Draw Fog of War (Confidence Visualization) - depends on both world and agents
+            if has_world and has_agents:
+                self._render_fog_of_war(game_state, local_agent_id)
 
+            if has_agents:
+                self._render_agents(game_state)
+
+            self._render_ui(game_state, local_agent_id)
+
+            pygame.display.flip()
+        except Exception as e:
+            print(f"Renderer Error: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _render_ui(self, game_state, local_agent_id):
         # UI Overlay
         fps_text = f"FPS: {int(self.clock.get_fps())}"
         surface = self.font.render(fps_text, True, self.config.WHITE)
         self.screen.blit(surface, (10, 10))
 
-        pygame.display.flip()
+        # Safely check for agents
+        agents = getattr(game_state, "agents", [])
+        
+        # Find local agent
+        local_agent = None
+        for agent in agents:
+            if agent.id == local_agent_id:
+                local_agent = agent
+                break
+        
+        if local_agent:
+            # Draw health and inventory
+            ui_y = self.config.SCREEN_HEIGHT - 40
+            health_text = f"HP: {int(local_agent.health)}"
+            # Use getattr because ProxyAgent might not have inventory
+            inv = getattr(local_agent, 'inventory', {})
+            scrap = inv.get("scrap", 0)
+            food = inv.get("food", 0)
+            ammo = getattr(local_agent, 'ammo', 0)
+            
+            ui_text = f"ID: {local_agent_id} | {health_text} | Scrap: {scrap} | Food: {food} | Ammo: {ammo}"
+            surface = self.font.render(ui_text, True, self.config.WHITE)
+            self.screen.blit(surface, (10, ui_y))
 
     def _render_resources(self, game_state) -> None:
         tile_size = self.config.TILE_SIZE
@@ -77,10 +117,10 @@ class GameRenderer:
             pygame.draw.rect(self.screen, color, (center_x - 2, center_y - 2, 4, 4))
             pygame.draw.rect(self.screen, (255, 255, 255), (center_x - 2, center_y - 2, 4, 4), 1)
 
-    def _render_fog_of_war(self, game_state) -> None:
+    def _render_fog_of_war(self, game_state, local_agent_id) -> None:
         """Visualizes agent visibility/confidence."""
-        # Find the primary agent (Agent 1)
-        hero = next((a for a in game_state.agents if a.id == 1), None)
+        # Find the local agent
+        hero = next((a for a in game_state.agents if a.id == local_agent_id), None)
         if not hero:
             return
 
