@@ -187,6 +187,10 @@ class GameRenderer:
             # Right-side info panel (always drawn)
             self._render_panel(game_state, local_agent_id)
 
+            # Game over overlay
+            if getattr(game_state, "game_over", False):
+                self._render_game_over(game_state, local_agent_id)
+
             pygame.display.flip()
         except Exception as e:
             print(f"Renderer Error: {e}")
@@ -197,6 +201,77 @@ class GameRenderer:
 
     def quit(self):
         pygame.quit()
+
+    # ══════════════════════════════════════════════════════════════════
+    #  GAME  OVER  OVERLAY
+    # ══════════════════════════════════════════════════════════════════
+
+    def _render_game_over(self, game_state, local_agent_id) -> None:
+        """Full-screen game-over overlay."""
+        winner = getattr(game_state, "winner", None)
+        is_winner = (winner == local_agent_id)
+
+        # Dim the whole screen
+        dim = pygame.Surface((self.win_w, self.win_h), pygame.SRCALPHA)
+        dim.fill((0, 0, 0, 160))
+        self.screen.blit(dim, (0, 0))
+
+        # Center of game area
+        cx = self.map_w // 2
+        cy = self.map_h // 2
+
+        # Animated pulse
+        pulse = 0.5 + 0.5 * math.sin(self._anim_tick * 0.04)
+
+        # Banner box
+        bw, bh = 420, 180
+        bx = cx - bw // 2
+        by = cy - bh // 2
+
+        if is_winner:
+            border_col = (60, 220, 100)
+            title_text = "VICTORY!"
+            title_col  = (80, 255, 120)
+            sub_text   = f"Agent {local_agent_id} wins the match!"
+            glow_col   = (40, 200, 80)
+        else:
+            border_col = (220, 60, 60)
+            title_text = "DEFEATED"
+            title_col  = (255, 80, 80)
+            sub_text   = f"Agent {winner} wins the match!"
+            glow_col   = (200, 40, 40)
+
+        # Glow behind box
+        glow_r = int(240 + 20 * pulse)
+        glow_s = pygame.Surface((glow_r * 2, glow_r * 2), pygame.SRCALPHA)
+        pygame.draw.circle(glow_s, (*glow_col, int(25 + 15 * pulse)), (glow_r, glow_r), glow_r)
+        self.screen.blit(glow_s, (cx - glow_r, cy - glow_r))
+
+        # Box
+        box = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        pygame.draw.rect(box, (10, 10, 18, 230), (0, 0, bw, bh), border_radius=10)
+        pygame.draw.rect(box, (*border_col, 200), (0, 0, bw, bh), 3, border_radius=10)
+        self.screen.blit(box, (bx, by))
+
+        # Title
+        title = self.font_lg.render(title_text, True, title_col)
+        self.screen.blit(title, (cx - title.get_width() // 2, by + 30))
+
+        # Subtitle line
+        sub = self.font_md_b.render(sub_text, True, (200, 205, 220))
+        self.screen.blit(sub, (cx - sub.get_width() // 2, by + 70))
+
+        # Divider
+        pygame.draw.line(self.screen, (60, 65, 85), (bx + 30, by + 105), (bx + bw - 30, by + 105), 1)
+
+        # "GAME OVER" label
+        go = self.font_sm.render("GAME  OVER", True, (140, 145, 170))
+        self.screen.blit(go, (cx - go.get_width() // 2, by + 115))
+
+        # Tick info
+        tick_text = f"Final tick: {getattr(game_state, 'ticks', 0)}"
+        tt = self.font_xs.render(tick_text, True, (100, 105, 125))
+        self.screen.blit(tt, (cx - tt.get_width() // 2, by + 140))
 
     # ══════════════════════════════════════════════════════════════════
     #  WORLD  TILES

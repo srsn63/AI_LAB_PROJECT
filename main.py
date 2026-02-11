@@ -83,6 +83,8 @@ class ProxyGameState:
         self.world = None
         self.agents = []
         self.ticks = 0
+        self.game_over = False
+        self.winner = None
 
 def main():
     config = GameConfig()
@@ -147,20 +149,19 @@ def main():
                 if game_state.world:
                     game_state.world.agents = game_state.agents
 
-                # 4. Run AI Logic (Client Side!)
-                action_packet = local_agent.update(game_state)
-                
-                # 5. Send action back to server
-                if action_packet:
-                    # Only send if there's an actual action or position change
-                    if action_packet.get("action") or action_packet.get("position"):
-                        client.send_action(action_packet)
-                    else:
-                        # Send heartbeat/empty action occasionally?
-                        pass
+                # 4. Run AI Logic only if alive and game not over
+                if local_agent.health > 0 and not game_state.game_over:
+                    action_packet = local_agent.update(game_state)
+                    
+                    # 5. Send action back to server
+                    if action_packet:
+                        if action_packet.get("action") or action_packet.get("position"):
+                            client.send_action(action_packet)
                     
             elif msg_type == "game_over":
-                print(f"Game Over! Winner: Agent {data['winner']}")
+                game_state.game_over = True
+                game_state.winner = data.get("winner")
+                print(f"Game Over! Winner: Agent {game_state.winner}")
         except Exception as e:
             print(f"Error in on_server_message: {e}")
             import traceback

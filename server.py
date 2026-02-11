@@ -324,9 +324,6 @@ class GameServer:
                             continue
                             
                         agent = self.agents[agent_id]
-                        if agent.health <= 0:
-                            continue
-                            
                         state = self.get_visible_state(agent_id)
                         await websocket.send(json.dumps({
                             "type": "update",
