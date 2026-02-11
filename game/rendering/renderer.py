@@ -189,7 +189,8 @@ class GameRenderer:
             pygame.draw.circle(self.screen, (255, 255, 255), (center_x, center_y), tile_size // 3, 2)
             
             # Draw Health Bar (Cleaner)
-            health_pct = max(0.0, agent.health / 100.0)
+            max_hp = getattr(agent, 'max_health', 100.0)
+            health_pct = max(0.0, min(1.0, agent.health / max_hp))
             bar_w = tile_size - 8
             bar_h = 3
             bar_x = agent.x * tile_size + 4

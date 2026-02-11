@@ -255,9 +255,9 @@ class GameServer:
                 agent.inventory[res.type] = agent.inventory.get(res.type, 0) + res.amount
                 # Also give some ammo/health if it's food/ammo
                 if res.type == "food":
-                    agent.health = min(100.0, agent.health + 5)
+                    agent.health = min(agent.max_health, agent.health + 5)
                 elif res.type == "ammo":
-                    agent.ammo += 10
+                    agent.ammo += res.amount
                     
                 self.world.resources.remove(res)
                 print(f"[Server] Agent {agent_id} collected {res.amount} {res.type} at ({agent.x}, {agent.y})")

@@ -26,12 +26,6 @@ class ProxyWorld:
         self.resources = []
         self.agents = []
 
-    def get_resource_at(self, x, y):
-        for res in self.resources:
-            if res.x == x and res.y == y:
-                return res
-        return None
-
     def update_from_server(self, visible_tiles, visible_resources):
         for t in visible_tiles:
             self.grid[t["y"]][t["x"]] = ProxyTile(t["type"])
@@ -39,14 +33,7 @@ class ProxyWorld:
         # Update resources (only those we see)
         self.resources = []
         for r in visible_resources:
-            # Create a simple resource object for the renderer
-            class Resource:
-                def __init__(self, data):
-                    self.x = data["x"]
-                    self.y = data["y"]
-                    self.type = data["type"]
-                    self.amount = data["amount"]
-            self.resources.append(Resource(r))
+            self.resources.append(ProxyResource(r))
 
     def is_walkable(self, x, y):
         if not (0 <= x < self.width and 0 <= y < self.height):
@@ -75,6 +62,21 @@ class ProxyWorld:
             if res.x == x and res.y == y:
                 return res
         return None
+
+class ProxyAgent:
+    def __init__(self, d):
+        self.id = d["id"]
+        self.x = d["x"]
+        self.y = d["y"]
+        self.health = d["health"]
+        self.ammo = d.get("ammo", 0)
+
+class ProxyResource:
+    def __init__(self, data):
+        self.x = data["x"]
+        self.y = data["y"]
+        self.type = data["type"]
+        self.amount = data["amount"]
 
 class ProxyGameState:
     def __init__(self):
@@ -139,13 +141,6 @@ def main():
                 # 3. Update other agents (proxy objects for rendering)
                 game_state.agents = [local_agent]
                 for other_data in server_state["others"]:
-                    class ProxyAgent:
-                        def __init__(self, d):
-                            self.id = d["id"]
-                            self.x = d["x"]
-                            self.y = d["y"]
-                            self.health = d["health"]
-                            self.ammo = d.get("ammo", 0)
                     game_state.agents.append(ProxyAgent(other_data))
                 
                 # Sync agents to world for pathfinding collision detection

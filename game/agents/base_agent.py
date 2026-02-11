@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict, Any
 
 from game.agents.astar import AStar, Coord, PathfindingMap
 from game.agents.fsm import FiniteStateMachine

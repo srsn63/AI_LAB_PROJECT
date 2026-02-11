@@ -157,19 +157,19 @@ class MapGenerator:
 
     def _ensure_connectivity(self, grid: List[List[TerrainType]]) -> List[List[TerrainType]]:
         # Find all walkable regions using flood fill
-        walkable = []
+        walkable_set = set()
         for y in range(self.height):
             for x in range(self.width):
                 if grid[y][x] != TerrainType.WALL:
-                    walkable.append((x, y))
+                    walkable_set.add((x, y))
         
-        if not walkable:
+        if not walkable_set:
             return grid # Should not happen
 
         regions = []
         visited = set()
         
-        for start_pos in walkable:
+        for start_pos in walkable_set:
             if start_pos in visited: continue
             
             region = set()
@@ -183,7 +183,7 @@ class MapGenerator:
                 cx, cy = curr
                 for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                     nx, ny = cx + dx, cy + dy
-                    if (nx, ny) in walkable and (nx, ny) not in visited:
+                    if (nx, ny) in walkable_set and (nx, ny) not in visited:
                         stack.append((nx, ny))
             regions.append(region)
             
