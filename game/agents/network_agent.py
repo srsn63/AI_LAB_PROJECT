@@ -70,13 +70,18 @@ class NetworkedAgent(BaseAgent):
         if self.ammo < old_ammo:
             action = "ATTACK"
             self.ammo = old_ammo
-            
-            others = world_state.agents if hasattr(world_state, 'agents') else []
-            if others:
-                others = [o for o in others if o.id != self.id]
+
+            pending_target = getattr(self, "_pending_attack_target_id", None)
+            if pending_target is not None:
+                target_id = pending_target
+                delattr(self, "_pending_attack_target_id")
+            else:
+                others = world_state.agents if hasattr(world_state, "agents") else []
                 if others:
-                    others.sort(key=lambda o: abs(o.x - self.x) + abs(o.y - self.y))
-                    target_id = others[0].id
+                    others = [o for o in others if o.id != self.id]
+                    if others:
+                        others.sort(key=lambda o: abs(o.x - self.x) + abs(o.y - self.y))
+                        target_id = others[0].id
             print(f"[Agent {self.id}] AI requested ATTACK on {target_id}")
 
         # 2. Detect if FSM/Minimax performed a MOVE (direct modification)
@@ -100,8 +105,9 @@ class NetworkedAgent(BaseAgent):
                     if res:
                         action = "SCAVENGE"
             elif current_state == "EAT":
-                action = "EAT"
-                print(f"[Agent {self.id}] AI requested EAT")
+                if self.inventory.get("food", 0) > 0:
+                    action = "EAT"
+                    print(f"[Agent {self.id}] AI requested EAT")
             elif current_state == "UPGRADE":
                 action = "UPGRADE"
                 self.pending_upgrade_type = getattr(self, "pending_upgrade_type", "MAX_HEALTH")
@@ -109,6 +115,10 @@ class NetworkedAgent(BaseAgent):
 
         # 4. Handle movement from path if no other move was detected
         if not move_to and not action and self.path:
+            # Fix for "Halted" bug: if path index is 0 and path[0] == current pos, advance index immediately
+            if self._path_index == 0 and len(self.path) > 1 and (self.x, self.y) == self.path[0]:
+                self._path_index = 1
+                
             if self._path_index < len(self.path):
                 if (self.x, self.y) == self.path[self._path_index]:
                     self._path_index += 1

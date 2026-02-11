@@ -49,70 +49,121 @@ class FightState(State):
         self.depth = depth
 
     def enter(self, agent):
-        # Adjust aggression based on confidence?
-        # For now, just reset
-        pass
+        agent.path = []
+        agent._path_index = 0
+        agent._fight_repath_ticks = 0
+        agent._fight_target_pos = None
 
     def execute(self, agent, world_state) -> Optional[str]:
-        # 1. Check Vital Transitions
-        if agent.health <= 20: # Lowered threshold to keep fighting longer
+        if agent.health <= 20:
             return "FLEE"
         if agent.ammo <= 0:
-            return "SCAVENGE" # Go find ammo/scrap
-        
-        # 2. Execute Combat Logic (Minimax)
-        target = None
-        min_dist = float('inf')
-        
-        potential_targets = getattr(world_state, 'agents', [])
-        for other in potential_targets:
-            if other.id != agent.id and other.health > 0:
-                dist = abs(agent.x - other.x) + abs(agent.y - other.y)
-                if dist < min_dist:
-                    min_dist = dist
-                    target = other
-        
-        if target:
-            # If target is too far, stop fighting and scavenge
-            if min_dist > 12: # Increased chase range
-                return "SCAVENGE"
+            return "SCAVENGE"
 
-            # Construct Combat State
+        def chebyshev(ax, ay, bx, by):
+            return max(abs(ax - bx), abs(ay - by))
+
+        world = getattr(world_state, "world", None)
+        potential_targets = [
+            o for o in getattr(world_state, "agents", [])
+            if getattr(o, "id", None) != agent.id and getattr(o, "health", 0) > 0
+        ]
+        if not potential_targets:
+            return "SCAVENGE"
+
+        target = min(
+            potential_targets,
+            key=lambda o: (chebyshev(agent.x, agent.y, o.x, o.y), getattr(o, "health", 0)),
+        )
+        dist = chebyshev(agent.x, agent.y, target.x, target.y)
+
+        attack_range = 5
+
+        if dist <= attack_range:
             c_agent = CombatAgentState(agent.x, agent.y, agent.health, agent.ammo)
             c_opp = CombatAgentState(target.x, target.y, target.health, target.ammo)
             state = CombatState(c_agent, c_opp)
-            
-            # Run Minimax
+
             move, score = self.minimax.get_best_move(state, depth=self.depth)
-            
-            # Apply Move (Simplified: Agent updates position directly or shoots)
-            # In networked mode, NetworkedAgent will detect these changes, revert them locally,
-            # and send the request to the server.
-            
+
             if move == "ATTACK":
+                agent._pending_attack_target_id = target.id
                 agent.ammo -= 1
-                # We don't update target health locally in networked mode
-                # The server will handle it and update us via state
                 print(f"[Agent {agent.id}] Action: ATTACK Agent {target.id} | Score: {score:.2f}")
-            elif move.startswith("MOVE"):
+
+                if hasattr(world_state, "economy"):
+                    damage = 10 + agent.upgrades.get(UpgradeType.WEAPON_DMG, 0) * 5
+                    target.health -= damage
+                    if target.health <= 0:
+                        print(f"[Local] Agent {target.id} was killed by Agent {agent.id}")
+            else:
+                dx, dy = 0, 0
                 if move == "MOVE_LEFT":
-                    agent.x -= 1
+                    dx = -1
                 elif move == "MOVE_RIGHT":
-                    agent.x += 1
+                    dx = 1
                 elif move == "MOVE_UP":
-                    agent.y -= 1
+                    dy = -1
                 elif move == "MOVE_DOWN":
-                    agent.y += 1
-                print(f"[Agent {agent.id}] Action: {move} to ({agent.x}, {agent.y}) | Combat Score: {score:.2f}")
-                
-        else:
-            # No enemies? Go back to scavenging
-            return "SCAVENGE"
+                    dy = 1
+
+                if dx != 0 or dy != 0:
+                    nx, ny = agent.x + dx, agent.y + dy
+                    if world is None or world.is_walkable(nx, ny):
+                        agent.set_path([(nx, ny)])
+            return None
+
+        agent._fight_repath_ticks = getattr(agent, "_fight_repath_ticks", 0) + 1
+        target_pos = (target.x, target.y)
+
+        repath = (
+            world is not None
+            and (
+                not agent.path
+                or agent._path_index >= len(agent.path)
+                or getattr(agent, "_fight_target_pos", None) != target_pos
+                or agent._fight_repath_ticks >= 4
+            )
+        )
+
+        if repath and world is not None:
+            agent._fight_repath_ticks = 0
+            agent._fight_target_pos = target_pos
+
+            best_tile = None
+            best_dist = float("inf")
+            for ty in range(max(0, target.y - attack_range), min(world.height, target.y + attack_range + 1)):
+                for tx in range(max(0, target.x - attack_range), min(world.width, target.x + attack_range + 1)):
+                    if chebyshev(tx, ty, target.x, target.y) > attack_range:
+                        continue
+                    if not world.is_walkable(tx, ty):
+                        continue
+                    d = abs(agent.x - tx) + abs(agent.y - ty)
+                    if d < best_dist:
+                        best_dist = d
+                        best_tile = (tx, ty)
+
+            if best_tile:
+                agent.path = []
+                agent.plan_path(best_tile, world)
+                # Fallback if path planning failed for best_tile
+                if not agent.path or len(agent.path) < 2:
+                     best_tile = None # Trigger random fallback below
+            
+            if not best_tile:
+                neighbors = [n for n in world.get_neighbors(agent.x, agent.y) if world.is_walkable(*n)]
+                if neighbors:
+                    neighbors.sort(key=lambda p: chebyshev(p[0], p[1], target.x, target.y))
+                    agent.set_path([neighbors[0]])
 
         return None
 
     def exit(self, agent):
-        pass
+        agent.path = []
+        agent._path_index = 0
+        for attr in ("_fight_repath_ticks", "_fight_target_pos", "_pending_attack_target_id"):
+            if hasattr(agent, attr):
+                delattr(agent, attr)
 
 
 class FleeState(State):
@@ -121,10 +172,13 @@ class FleeState(State):
     def enter(self, agent):
         agent.path = []
         agent._path_index = 0
+        agent._flee_ticks = 0
 
     def execute(self, agent, world_state) -> Optional[str]:
         if agent.health > 70:
             return "SCAVENGE"
+
+        agent._flee_ticks = getattr(agent, "_flee_ticks", 0) + 1
 
         world = getattr(world_state, "world", None)
         if not world:
@@ -164,33 +218,42 @@ class FleeState(State):
                             return (nx, ny)
             return None
 
+        if agent._flee_ticks >= 3:
+            current_dist = min_threat_dist((agent.x, agent.y))
+            if not threats or current_dist >= 10:
+                if agent.health < 60 and agent.inventory.get("food", 0) > 0:
+                    return "EAT"
+                return "SCAVENGE"
+
+        if agent._flee_ticks >= 30:
+            return "SCAVENGE"
+
         is_path_finished = not agent.path or agent._path_index >= len(agent.path)
         if is_path_finished:
-            bases = [
-                (0, 0),
-                (world.width - 1, 0),
-                (0, world.height - 1),
-                (world.width - 1, world.height - 1),
-                (world.width // 2, world.height // 2),
-            ]
-
             candidates = []
-            for base in bases:
-                p = nearest_walkable(base)
-                if p:
-                    candidates.append(p)
+            if threats:
+                vx = sum(agent.x - t.x for t in threats)
+                vy = sum(agent.y - t.y for t in threats)
+                if vx == 0 and vy == 0:
+                    vx = random.choice([-1, 1])
+                    vy = random.choice([-1, 1])
+                step_x = 0 if vx == 0 else (1 if vx > 0 else -1)
+                step_y = 0 if vy == 0 else (1 if vy > 0 else -1)
+                for dist in (5, 8, 12, 16):
+                    tx = max(0, min(world.width - 1, agent.x + step_x * dist + random.randint(-2, 2)))
+                    ty = max(0, min(world.height - 1, agent.y + step_y * dist + random.randint(-2, 2)))
+                    candidates.append((tx, ty))
 
-            for _ in range(40):
-                rx = random.randint(0, world.width - 1)
-                ry = random.randint(0, world.height - 1)
-                if world.is_walkable(rx, ry):
-                    candidates.append((rx, ry))
+            for _ in range(18):
+                candidates.append((random.randint(0, world.width - 1), random.randint(0, world.height - 1)))
 
-            candidates = [p for p in candidates if p != (agent.x, agent.y)]
-            candidates.sort(key=lambda p: (min_threat_dist(p), random.random()), reverse=True)
+            candidates = [c for c in candidates if c != (agent.x, agent.y)]
+            candidates = list(dict.fromkeys(candidates))
 
             planned = False
-            for target in candidates[:25]:
+            for target in candidates:
+                if not world.is_walkable(*target):
+                    continue
                 agent.plan_path(target, world)
                 if agent.path and len(agent.path) >= 2:
                     planned = True
@@ -199,16 +262,21 @@ class FleeState(State):
                 agent._path_index = 0
 
             if not planned:
-                neighbors = getattr(world, "get_neighbors", lambda x, y: [])(agent.x, agent.y)
+                # Fallback if path planning failed or no best tile
+                print(f"[Agent {agent.id}] Flee path failed. Picking random neighbor.")
+                neighbors = [n for n in world.get_neighbors(agent.x, agent.y) if world.is_walkable(*n)]
                 if neighbors:
-                    best = max(neighbors, key=min_threat_dist)
-                    agent.set_path([best])
+                    target = random.choice(neighbors)
+                    agent.plan_path(target, world)
+
 
         return None
 
     def exit(self, agent):
         agent.path = []
         agent._path_index = 0
+        if hasattr(agent, "_flee_ticks"):
+            delattr(agent, "_flee_ticks")
 
 
 class ScavengeState(State):
@@ -218,37 +286,71 @@ class ScavengeState(State):
         pass
 
     def execute(self, agent, world_state) -> Optional[str]:
-        # 1. Transitions
-        if agent.health < 30:
+        low_health = agent.health < 30
+        has_food = agent.inventory.get("food", 0) > 0
+        if low_health and has_food:
             return "EAT"
-        if agent.inventory.get("scrap", 0) >= 15: # Increased threshold slightly
+        if agent.inventory.get("scrap", 0) >= 15:
             return "UPGRADE"
-            
-        # Check for nearby enemies to initiate FIGHT
-        potential_targets = getattr(world_state, 'agents', [])
+
+        def chebyshev(ax, ay, bx, by):
+            return max(abs(ax - bx), abs(ay - by))
+
+        potential_targets = getattr(world_state, "agents", [])
         for other in potential_targets:
-            if other.id != agent.id and other.health > 0:
-                dist = abs(agent.x - other.x) + abs(agent.y - other.y)
-                if dist < 8:
+            if getattr(other, "id", None) != agent.id and getattr(other, "health", 0) > 0:
+                dist = chebyshev(agent.x, agent.y, other.x, other.y)
+                if dist <= 7 and agent.health > 40 and agent.ammo > 0:
                     return "FIGHT"
+
+        agent._scavenge_ticks = getattr(agent, "_scavenge_ticks", 0) + 1
             
-        # 2. Logic: Move to nearest resource
-        # Fix: Check if path is finished or empty
         is_path_finished = not agent.path or agent._path_index >= len(agent.path)
+        is_stuck = getattr(agent, "_stuck_ticks", 0) > 2
         
-        if is_path_finished:
+        if is_path_finished or is_stuck or (getattr(agent, "_scavenge_ticks", 0) % 4 == 0):
             world = getattr(world_state, 'world', None)
+            
+            if is_stuck and world:
+                print(f"[Agent {agent.id}] Stuck in SCAVENGE. Moving randomly.")
+                neighbors = [n for n in world.get_neighbors(agent.x, agent.y) if world.is_walkable(*n)]
+                if neighbors:
+                    target = random.choice(neighbors)
+                    agent.path = []
+                    agent.plan_path(target, world)
+                return None
+
             if world and world.resources:
-                # Find nearest resource that IS NOT the one we are currently on
                 nearest = None
+                best_score = float("-inf")
                 min_dist = float('inf')
                 for res in world.resources:
-                    # Skip if we are already on this resource
                     if res.x == agent.x and res.y == agent.y:
                         continue
                         
                     dist = abs(agent.x - res.x) + abs(agent.y - res.y)
-                    if dist < min_dist:
+                    desire = 0.0
+                    if res.type == "food":
+                        if low_health and not has_food:
+                            desire += 12.0
+                        if agent.health < 50:
+                            desire += 6.0
+                        elif agent.health < 80:
+                            desire += 3.0
+                        else:
+                            desire += 0.5
+                    if res.type == "ammo":
+                        if agent.ammo < 3:
+                            desire += 6.0
+                        elif agent.ammo < 15:
+                            desire += 2.0
+                        else:
+                            desire += 0.5
+                    if res.type == "scrap":
+                        desire += 1.0
+                    score = desire * 10.0 - dist
+                    if score > best_score:
+                        best_score = score
                         min_dist = dist
                         nearest = res
                 
@@ -256,20 +358,82 @@ class ScavengeState(State):
                     # Clear old path before planning new one
                     agent.path = []
                     agent.plan_path((nearest.x, nearest.y), world)
-                else:
-                    # If we are only seeing the resource we are on, just stay here
-                    # and wait for it to be collected.
-                    pass
+                    
+                    # Fix for "Halted" bug: If path is invalid/empty, try next resource
+                    if not agent.path or len(agent.path) < 2:
+                        print(f"[Agent {agent.id}] Path to nearest resource failed. Retrying...")
+                        # Remove this resource from consideration locally by temporarily setting distance to inf
+                        # Actually, just try the next best score?
+                        # Re-sort resources by score and try until one works
+                        
+                        scored_resources = []
+                        for res in world.resources:
+                            if res.x == agent.x and res.y == agent.y: continue
+                            
+                            dist = abs(agent.x - res.x) + abs(agent.y - res.y)
+                            desire = 0.0
+                            if res.type == "food":
+                                if low_health and not has_food: desire += 12.0
+                                if agent.health < 50: desire += 6.0
+                                elif agent.health < 80: desire += 3.0
+                                else: desire += 0.5
+                            if res.type == "ammo":
+                                if agent.ammo < 3: desire += 6.0
+                                elif agent.ammo < 15: desire += 2.0
+                                else: desire += 0.5
+                            if res.type == "scrap": desire += 1.0
+                            score = desire * 10.0 - dist
+                            scored_resources.append((score, res))
+                        
+                        scored_resources.sort(key=lambda x: x[0], reverse=True)
+                        
+                        found_path = False
+                        for score, res in scored_resources:
+                            agent.path = []
+                            agent.plan_path((res.x, res.y), world)
+                            if agent.path and len(agent.path) >= 2:
+                                agent._scavenge_goal = (res.x, res.y, res.type)
+                                found_path = True
+                                break
+                        
+                        if not found_path:
+                            # Total failure to path to any resource? Wander.
+                            nearest = None # Trigger wander block below
+                    else:
+                        agent._scavenge_goal = (nearest.x, nearest.y, nearest.type)
+                
+                if not nearest:
+                    w, h = world.width, world.height
+                    planned = False
+                    for _ in range(8):
+                        rx, ry = random.randint(0, w - 1), random.randint(0, h - 1)
+                        agent.path = []
+                        agent.plan_path((rx, ry), world)
+                        if agent.path and len(agent.path) >= 2:
+                            planned = True
+                            break
+                    if not planned:
+                        neighbors = [n for n in world.get_neighbors(agent.x, agent.y) if world.is_walkable(*n)]
+                        if neighbors:
+                            agent.set_path([random.choice(neighbors)])
             else:
                 # Wander if no resources
-                import random
                 w, h = 20, 15
                 if world:
                     w, h = world.width, world.height
-                rx, ry = random.randint(0, w-1), random.randint(0, h-1)
                 if world:
-                    agent.path = []
-                    agent.plan_path((rx, ry), world)
+                    planned = False
+                    for _ in range(8):
+                        rx, ry = random.randint(0, w - 1), random.randint(0, h - 1)
+                        agent.path = []
+                        agent.plan_path((rx, ry), world)
+                        if agent.path and len(agent.path) >= 2:
+                            planned = True
+                            break
+                    if not planned:
+                        neighbors = [n for n in world.get_neighbors(agent.x, agent.y) if world.is_walkable(*n)]
+                        if neighbors:
+                            agent.set_path([random.choice(neighbors)])
 
         # 3. Resource collection check
         world = getattr(world_state, 'world', None)
@@ -290,12 +454,16 @@ class ScavengeState(State):
                     # Clear path regardless (we reached the target)
                     agent.path = []
                     agent._path_index = 0
+                    if hasattr(agent, "_scavenge_goal"):
+                        delattr(agent, "_scavenge_goal")
                     break
                 
         return None
 
     def exit(self, agent):
-        pass
+        for attr in ("_scavenge_ticks", "_scavenge_goal"):
+            if hasattr(agent, attr):
+                delattr(agent, attr)
 
 
 class EatState(State):
@@ -305,6 +473,8 @@ class EatState(State):
         pass
 
     def execute(self, agent, world_state) -> Optional[str]:
+        target_health = 60
+
         # Try to eat
         if hasattr(world_state, 'economy'):
             success = world_state.economy.consume_item(agent, ResourceType.FOOD, 1)
@@ -318,8 +488,10 @@ class EatState(State):
             # and send the action. We just need to check if we have food locally.
             if agent.inventory.get("food", 0) <= 0:
                 return "SCAVENGE"
-        
-        # Go back to scavenging after eating
+
+        if agent.health < target_health and agent.inventory.get("food", 0) > 0:
+            return None
+
         return "SCAVENGE"
 
     def exit(self, agent):

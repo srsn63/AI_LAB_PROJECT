@@ -5,7 +5,7 @@ import time
 from typing import Dict, List, Set, Optional
 import websockets
 from game.core.config import GameConfig
-from game.world.map import World
+from game.world.map import World, ResourceEntity
 from game.world.generator import MapGenerator
 from game.systems.economy import EconomySystem, ResourceType, UpgradeType
 from game.agents.base_agent import BaseAgent
@@ -29,6 +29,103 @@ class GameServer:
         # Game state tracking
         self.max_agents = 2 # Back to 2
         self.connected_agents = 0
+        self._last_drop_tick = 0
+        self._drop_cooldown_ticks = 25
+        self._min_world_resources = 6
+        self._drop_spawn_radius = 7
+        
+    def _maybe_spawn_drops(self) -> None:
+        if not self.world:
+            return
+        if not self.game_started:
+            return
+        if self.ticks - self._last_drop_tick < self._drop_cooldown_ticks:
+            return
+        
+        total_resources = len(self.world.resources)
+        food_count = 0
+        for r in self.world.resources:
+            if r.type == "food":
+                food_count += 1
+        
+        spawn_count = 0
+        if total_resources == 0:
+            spawn_count = 12
+        elif total_resources < self._min_world_resources:
+            spawn_count = self._min_world_resources - total_resources
+        
+        if food_count == 0:
+            spawn_count = max(spawn_count, 2)
+        
+        if spawn_count <= 0:
+            return
+        
+        alive_agents = [a for a in self.agents.values() if a.health > 0]
+        if not alive_agents:
+            return
+        
+        occupied = {(a.x, a.y) for a in alive_agents}
+        existing = {(r.x, r.y) for r in self.world.resources}
+        
+        def choose_type() -> str:
+            low_hp = any(a.health < 40 for a in alive_agents)
+            low_ammo = any(a.ammo < 3 for a in alive_agents)
+            roll = random.random()
+            if low_hp and roll < 0.55:
+                return "food"
+            if low_ammo and roll < 0.35:
+                return "ammo"
+            return "scrap" if roll < 0.7 else "food"
+        
+        spawned = 0
+        for _ in range(spawn_count):
+            center = random.choice(alive_agents)
+            chosen = None
+            
+            for _ in range(50):
+                dx = random.randint(-self._drop_spawn_radius, self._drop_spawn_radius)
+                dy = random.randint(-self._drop_spawn_radius, self._drop_spawn_radius)
+                x = center.x + dx
+                y = center.y + dy
+                if not (0 <= x < self.world.width and 0 <= y < self.world.height):
+                    continue
+                if not self.world.is_walkable(x, y):
+                    continue
+                if (x, y) in occupied or (x, y) in existing:
+                    continue
+                chosen = (x, y)
+                break
+            
+            if not chosen:
+                for _ in range(200):
+                    x = random.randint(0, self.world.width - 1)
+                    y = random.randint(0, self.world.height - 1)
+                    if not self.world.is_walkable(x, y):
+                        continue
+                    if (x, y) in occupied or (x, y) in existing:
+                        continue
+                    chosen = (x, y)
+                    break
+            
+            if not chosen:
+                continue
+            
+            r_type = choose_type()
+            if r_type == "food":
+                amount = 1
+            elif r_type == "ammo":
+                amount = random.randint(5, 10)
+            else:
+                amount = random.randint(2, 5)
+            
+            x, y = chosen
+            self.world.resources.append(ResourceEntity(x, y, r_type, amount))
+            existing.add((x, y))
+            spawned += 1
+        
+        if spawned > 0:
+            self._last_drop_tick = self.ticks
+            print(f"[Server] Spawned {spawned} drops (world resources: {len(self.world.resources)})")
         
     async def start(self):
         print(f"Starting Game Server on {self.host}:{self.port} (Seed: {self.seed})...")
@@ -214,6 +311,7 @@ class GameServer:
                 # Run one tick of game logic every 200ms (5Hz)
                 await asyncio.sleep(0.2)
                 self.ticks += 1
+                self._maybe_spawn_drops()
                 
                 # Update visibility and send state to each client
                 disconnected_agents = []

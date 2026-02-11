@@ -24,6 +24,7 @@ class ProxyWorld:
         # Use simple objects that mimic the Tile class
         self.grid = [[ProxyTile("floor") for _ in range(width)] for _ in range(height)]
         self.resources = []
+        self.agents = []
 
     def get_resource_at(self, x, y):
         for res in self.resources:
@@ -50,7 +51,13 @@ class ProxyWorld:
     def is_walkable(self, x, y):
         if not (0 <= x < self.width and 0 <= y < self.height):
             return False
-        return self.grid[y][x].terrain != TerrainType.WALL
+        if self.grid[y][x].terrain == TerrainType.WALL:
+            return False
+        # Check if occupied by any agent (treat as obstacle)
+        for agent in self.agents:
+            if getattr(agent, 'health', 0) > 0 and agent.x == x and agent.y == y:
+                return False
+        return True
 
     def get_neighbors(self, x, y):
         neighbors = []
@@ -141,6 +148,10 @@ def main():
                             self.ammo = d.get("ammo", 0)
                     game_state.agents.append(ProxyAgent(other_data))
                 
+                # Sync agents to world for pathfinding collision detection
+                if game_state.world:
+                    game_state.world.agents = game_state.agents
+
                 # 4. Run AI Logic (Client Side!)
                 action_packet = local_agent.update(game_state)
                 

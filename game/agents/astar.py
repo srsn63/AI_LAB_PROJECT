@@ -36,6 +36,8 @@ class AStar:
         if start == goal:
             return [start]
 
+        is_walkable = getattr(nav_map, "is_walkable", None)
+
         open_set: List[_Node] = []
         heappush(open_set, _Node(priority=0.0, position=start))
 
@@ -50,6 +52,8 @@ class AStar:
                 return self._reconstruct_path(came_from, current)
 
             for neighbor in nav_map.get_neighbors(*current):
+                if is_walkable is not None and not is_walkable(*neighbor):
+                    continue
                 tentative_g = g_score[current] + nav_map.get_cost(*neighbor)
                 if tentative_g < g_score.get(neighbor, float("inf")):
                     came_from[neighbor] = current

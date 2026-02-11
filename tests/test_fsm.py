@@ -15,9 +15,10 @@ class TestFSM(unittest.TestCase):
         self.assertIsInstance(self.agent.fsm.current_state, ScavengeState)
 
     def test_transition_low_health_scavenge_to_eat(self):
-        # SCAVENGE -> EAT if health < 30
+        # SCAVENGE -> EAT if health < 30 and food available
         self.agent.fsm.set_state("SCAVENGE")
         self.agent.health = 20
+        self.agent.inventory["food"] = 1
         self.agent.update(self.world)
         self.assertEqual(self.agent.fsm.current_state.name, "EAT")
 
