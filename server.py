@@ -207,7 +207,7 @@ class GameServer:
                 del self.clients[agent_id]
             if agent_id in self.agents:
                 del self.agents[agent_id]
-            self.connected_agents -= 1
+            self.connected_agents = max(0, self.connected_agents - 1)
             print(f"Cleaned up Agent {agent_id}. Remaining: {self.connected_agents}")
 
     def process_action(self, agent_id, data):
@@ -300,66 +300,102 @@ class GameServer:
                 except Exception as e:
                     print(f"[Server] Upgrade error for Agent {agent_id}: {e}")
 
+    def _reset_for_new_match(self):
+        """Reset all game state for a fresh rematch."""
+        self.seed = random.randint(0, 1000000)
+        random.seed(self.seed)
+        print(f"\n=== Resetting for new match (Seed: {self.seed}) ===")
+
+        self.game_over = False
+        self.game_started = False
+        self.winner = None
+        self.ticks = 0
+        self._last_drop_tick = 0
+        self.agents.clear()
+        self.clients.clear()
+        self.connected_agents = 0
+
+        # Regenerate world
+        tiles_x = self.config.SCREEN_WIDTH // self.config.TILE_SIZE
+        tiles_y = self.config.SCREEN_HEIGHT // self.config.TILE_SIZE
+        self.world = World(width=tiles_x, height=tiles_y)
+        self.world.generate(seed=self.seed)
+
+        generator = MapGenerator(self.world.width, self.world.height, seed=self.seed)
+        self.spawn_points = generator.get_balanced_spawns(self.world.grid, count=self.max_agents)
+        print("New world generated. Waiting for players to reconnect...")
+
     async def game_loop(self):
-        print("Game loop started.")
-        while not self.game_over:
-            if self.connected_agents >= 1: # Start if at least one agent is connected
-                if not self.game_started and self.connected_agents >= 2:
-                    self.game_started = True
-                if self.ticks % 50 == 0:
-                    print(f"Game tick {self.ticks}, connected: {self.connected_agents}")
-                # Run one tick of game logic every 200ms (5Hz)
-                await asyncio.sleep(0.2)
-                self.ticks += 1
-                self._maybe_spawn_drops()
-                
-                # Update visibility and send state to each client
-                disconnected_agents = []
-                # Use a copy of clients to avoid issues if items are added/removed
-                client_items = list(self.clients.items())
-                for agent_id, websocket in client_items:
-                    try:
-                        # Safety check: ensure agent exists
-                        if agent_id not in self.agents:
-                            continue
-                            
-                        agent = self.agents[agent_id]
-                        state = self.get_visible_state(agent_id)
-                        await websocket.send(json.dumps({
-                            "type": "update",
-                            "tick": self.ticks,
-                            "state": state
-                        }))
-                    except websockets.ConnectionClosed:
-                        disconnected_agents.append(agent_id)
-                    except Exception as e:
-                        print(f"Error updating/sending to Agent {agent_id}: {e}")
-                        import traceback
-                        traceback.print_exc()
-                        disconnected_agents.append(agent_id)
-                
-                # Cleanup disconnected clients
-                for agent_id in disconnected_agents:
-                    print(f"Cleaning up disconnected Agent {agent_id}")
-                    del self.clients[agent_id]
-                    self.connected_agents -= 1
-                
-                # Check for game over
-                alive = [a for a in self.agents.values() if a.health > 0]
-                if self.game_started and len(alive) <= 1:
-                    self.game_over = True
-                    if alive:
-                        self.winner = alive[0].id
-                    print(f"Game Over! Winner: Agent {self.winner}")
-                    
-                    # Notify clients
-                    for websocket in self.clients.values():
-                        await websocket.send(json.dumps({
-                            "type": "game_over",
-                            "winner": self.winner
-                        }))
-            else:
-                await asyncio.sleep(1.0) # Wait for connections
+        while True:  # outer loop allows rematches
+            print("Game loop started. Waiting for players...")
+
+            while not self.game_over:
+                if self.connected_agents >= 1:
+                    if not self.game_started and self.connected_agents >= 2:
+                        self.game_started = True
+                    if self.ticks % 50 == 0:
+                        print(f"Game tick {self.ticks}, connected: {self.connected_agents}")
+                    await asyncio.sleep(0.2)
+                    self.ticks += 1
+                    self._maybe_spawn_drops()
+
+                    # Update visibility and send state to each client
+                    disconnected_agents = []
+                    client_items = list(self.clients.items())
+                    for agent_id, websocket in client_items:
+                        try:
+                            if agent_id not in self.agents:
+                                continue
+                            agent = self.agents[agent_id]
+                            state = self.get_visible_state(agent_id)
+                            await websocket.send(json.dumps({
+                                "type": "update",
+                                "tick": self.ticks,
+                                "state": state
+                            }))
+                        except websockets.ConnectionClosed:
+                            disconnected_agents.append(agent_id)
+                        except Exception as e:
+                            print(f"Error updating/sending to Agent {agent_id}: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            disconnected_agents.append(agent_id)
+
+                    for agent_id in disconnected_agents:
+                        print(f"Cleaning up disconnected Agent {agent_id}")
+                        if agent_id in self.clients:
+                            del self.clients[agent_id]
+                        self.connected_agents = max(0, self.connected_agents - 1)
+
+                    # Check for game over
+                    alive = [a for a in self.agents.values() if a.health > 0]
+                    if self.game_started and len(alive) <= 1:
+                        self.game_over = True
+                        if alive:
+                            self.winner = alive[0].id
+                        print(f"Game Over! Winner: Agent {self.winner}")
+
+                        for websocket in list(self.clients.values()):
+                            try:
+                                await websocket.send(json.dumps({
+                                    "type": "game_over",
+                                    "winner": self.winner
+                                }))
+                            except Exception:
+                                pass
+                else:
+                    await asyncio.sleep(1.0)
+
+            # ── Match ended – close connections and reset for rematch ──
+            print("Match ended. Closing connections for rematch...")
+            await asyncio.sleep(2)          # let clients see game_over overlay
+            for ws in list(self.clients.values()):
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+            await asyncio.sleep(1)          # let handlers clean up
+            self._reset_for_new_match()
 
     def get_visible_state(self, agent_id):
         agent = self.agents[agent_id]
