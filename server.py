@@ -34,6 +34,7 @@ class GameServer:
         self._min_world_resources = 6
         self._drop_spawn_radius = 7
         self.rematch_votes: Set[int] = set()
+        self._client_lock = asyncio.Lock()
         
     def _maybe_spawn_drops(self) -> None:
         if not self.world:
@@ -147,27 +148,27 @@ class GameServer:
             await self.game_loop()
 
     async def handler(self, websocket):
-        # Assign unique agent ID
-        agent_id = 1
-        while agent_id in self.clients:
-            agent_id += 1
-            
-        if agent_id > self.max_agents:
-            print(f"Server full. Rejecting Agent {agent_id}")
-            await websocket.send(json.dumps({"type": "error", "message": "Server full"}))
-            return
+        async with self._client_lock:
+            # Assign unique agent ID (serialized to avoid race)
+            agent_id = 1
+            while agent_id in self.clients:
+                agent_id += 1
 
-        print(f"Agent {agent_id} connecting...")
-        
-        # Initialize agent on server
-        spawn_idx = (agent_id - 1) % len(self.spawn_points)
-        spawn = self.spawn_points[spawn_idx]
-        agent = BaseAgent(id=agent_id, x=spawn[0], y=spawn[1], health=100.0, ammo=20)
-        
-        # CRITICAL: Set agent BEFORE adding to clients to avoid race condition in game_loop
-        self.agents[agent_id] = agent
-        self.clients[agent_id] = websocket
-        self.connected_agents = len(self.clients)
+            if agent_id > self.max_agents:
+                print(f"Server full. Rejecting Agent {agent_id}")
+                await websocket.send(json.dumps({"type": "error", "message": "Server full"}))
+                return
+
+            print(f"Agent {agent_id} connecting...")
+
+            # Initialize agent on server
+            spawn_idx = (agent_id - 1) % len(self.spawn_points)
+            spawn = self.spawn_points[spawn_idx]
+            agent = BaseAgent(id=agent_id, x=spawn[0], y=spawn[1], health=100.0, ammo=20)
+
+            self.agents[agent_id] = agent
+            self.clients[agent_id] = websocket
+            self.connected_agents = len(self.clients)
         
         print(f"Agent {agent_id} initialized at {spawn}. Total connected: {self.connected_agents}")
 
@@ -207,13 +208,14 @@ class GameServer:
         except Exception as e:
             print(f"Unexpected error in handler for Agent {agent_id}: {e}")
         finally:
-            if self.clients.get(agent_id) is websocket:
-                del self.clients[agent_id]
-            if agent_id in self.agents:
-                del self.agents[agent_id]
-            self.rematch_votes.discard(agent_id)
-            self.connected_agents = len(self.clients)
-            print(f"Cleaned up Agent {agent_id}. Remaining: {self.connected_agents}")
+            async with self._client_lock:
+                if self.clients.get(agent_id) is websocket:
+                    del self.clients[agent_id]
+                if agent_id in self.agents:
+                    del self.agents[agent_id]
+                self.rematch_votes.discard(agent_id)
+                self.connected_agents = len(self.clients)
+                print(f"Cleaned up Agent {agent_id}. Remaining: {self.connected_agents}")
 
     def process_action(self, agent_id, data):
         agent = self.agents.get(agent_id)
